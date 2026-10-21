@@ -450,7 +450,7 @@ double process_widths(double width = 0) {
     float x = (float)*(int*)LoadedGame->X_res_Addr;
     float y = (float)*(int*)(LoadedGame->X_res_Addr + 0x4);
 
-    // orthoWidth = (x² / y²) × (3/4) × y = (x² × 3) / (4y)
+    // orthoWidth = (xÂ² / yÂ²) Ã— (3/4) Ã— y = (xÂ² Ã— 3) / (4y)
     float orthoWidth = (x * x * 3.0f) / (4.0f * y);
 
     width += (orthoWidth - x) / 2.0f;
@@ -852,58 +852,51 @@ vector2* fov_world;
 void _cdecl crosshair_render_hook(float x, float y, float width, float height, int unk1, float u1, float u2, float v1, float rotation, int shaderHandle) {
     int side;
     __asm mov side, esi
-    bool is_horizontal = !(side == 0 || side == 2);
 
-    static float stored_top_distance = 0.0f;
-    static float stored_arm_height   = 0.0f;
-
-    float screen_center_x = SCREEN_WIDTH  * 0.5f * (*cg_screenXScale);
-    float screen_center_y = SCREEN_HEIGHT * 0.5f * (*cg_screenYScale);
-
-    float sx = *cg_screenXScale;
-    float sy = *cg_screenYScale;
-
-    float widescreen_factor = 1.0f;
-    if (sx > sy + 0.0001f) {
-        float ratio = sx / sy;
-        widescreen_factor = ratio;
+    if (!(cg_fixedAspect && cg_fixedAspect->base->integer))
+    {
+        CG_AdjustFrom640(&x, &y, &width, &height);
+        cdecl_call<void>(crosshair_render_func, x, y, width, height, unk1, u1, u2, v1, rotation, shaderHandle);
+        return;
     }
 
-    if (!is_horizontal) {
-        // top (0), bottom (2)
-        float temp_x = x, temp_y = y, temp_width = width, temp_height = height;
-        CG_AdjustFrom640(&temp_x, &temp_y, &temp_width, &temp_height);
-        x = temp_x; y = temp_y; width = temp_width; height = temp_height;
+    // top (0), right (1), bottom (2), left (3)
+    const bool is_vertical = (side == 0 || side == 2);
 
-        if (side == 0) {
-            stored_top_distance = fabsf(y + height * 0.5f - screen_center_y);
-            stored_arm_height   = height;
+    static float crosshair_center_x = 0.0f;
+    static float crosshair_center_y = 0.0f;
+    static float crosshair_radius = 0.0f;
+
+    if (is_vertical)
+    {
+        CG_AdjustFrom640(&x, &y, &width, &height);
+
+        if (side == 0)
+        {
+            const float screen_center_y = (float)*(int*)(LoadedGame->X_res_Addr + 0x4) * 0.5f;
+
+            crosshair_center_x = x + width * 0.5f;
+            crosshair_center_y = screen_center_y;
+            crosshair_radius = std::fabs(screen_center_y - (y + height * 0.5f));
         }
-        else if (side == 2) {
-            y = screen_center_y + stored_top_distance - height * 0.5f;
+        else
+        {
+            x = crosshair_center_x - width * 0.5f;
+            y = crosshair_center_y + crosshair_radius - height * 0.5f;
         }
     }
-    else {
-        // left (3), right (1)
-        float temp_x = x, temp_y = y;
-        float temp_width = width, temp_height = height;
+    else
+    {
+        CG_AdjustFrom640(&x, &y, &height, &width);
 
-        CG_AdjustFrom640(&temp_x, &temp_y, &temp_height, &temp_width);
-        y = temp_y + (temp_width - temp_height) * 0.5f;
+        y = crosshair_center_y - height * 0.5f;
 
-        float arm_half = stored_arm_height * 0.5f;
+        const float sx = *cg_screenXScale;
+        const float sy = *cg_screenYScale;
+        const float widescreen_factor = (sx > sy + 0.0001f) ? (sx / sy) : 1.0f;
+        const float horiz_distance = crosshair_radius * widescreen_factor;
 
-        float horiz_distance = stored_top_distance * widescreen_factor;
-
-        if (side == 1) {
-            x = screen_center_x + horiz_distance - arm_half;
-        }
-        else if (side == 3) {
-            x = screen_center_x - horiz_distance - arm_half;
-        }
-
-        width = temp_width;
-        height = temp_height;
+        x = crosshair_center_x + (side == 1 ? horiz_distance : -horiz_distance) - width * 0.5f;
     }
 
     cdecl_call<void>(crosshair_render_func, x, y, width, height, unk1, u1, u2, v1, rotation, shaderHandle);
