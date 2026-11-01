@@ -1,4 +1,5 @@
 #include <helper.hpp>
+#include "hook_trace.h"
 #include "component_loader.h"
 
 void component_loader::register_component(std::unique_ptr<component_interface>&& component_)
@@ -58,7 +59,11 @@ void component_loader::post_unpack()
 
 	for (const auto& component_ : get_components())
 	{
+		const ULONGLONG start = GetTickCount64();
 		component_->post_unpack();
+		const ULONGLONG elapsed = GetTickCount64() - start;
+		if (elapsed > 50)
+			YAP_LOG("post_unpack: %s took %llu ms\n", typeid(*component_.get()).name(), elapsed);
 	}
 }
 

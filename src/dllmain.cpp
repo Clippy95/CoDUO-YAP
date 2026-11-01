@@ -1,6 +1,7 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 import game;
 #include "pch.h"
+#include "hook_trace.h"
 #include "game/game.h"
 #include <component_loader.h>
 #include <dwmapi.h>
@@ -56,11 +57,8 @@ cvar_t* get_cg_fov() {
 
 cvar_t* cg_fovscale_ads;
 cevar_t* cg_fov_fix_lowfovads;
-cevar_t* cg_fovMin;
-cvar_t* cg_fovscale;
 cevar_t* cg_hudelem_alignhack;
 cevar_t* cg_hudelem_printnames;
-cvar_t* cg_fixedAspectFOV;
 cevar_t* cg_fixedAspect;
 cvar_t* safeArea_horizontal;
 cvar_t* safeArea_vertical;
@@ -68,7 +66,7 @@ cvar_t* r_noborder;
 cevar_t* r_mode_auto;
 cevar_t* cg_fixedAspect_blackshader_all;
 
-cvar_t* player_sprintmult;
+cvar_t* player_sprintMult;
 
 cvar_t* hook_shortversion;
 
@@ -192,7 +190,7 @@ uintptr_t ui(uintptr_t CODUOSP, uintptr_t CODUOMP) {
 
 uintptr_t g(uintptr_t CODUOSP, uintptr_t CODUOMP) {
 
-    if (ui_offset == NULL)
+    if (game_offset == NULL)
         return NULL;
 
     uintptr_t result = 0;
@@ -247,18 +245,103 @@ cvar_s* __cdecl Cvar_Find(const char* a1) {
 }
 
 void trap_R_SetColor(float* rgba) {
-    auto ptr = cg(0x3002A750);
+    auto ptr = cg(0x3002A750, 0x3003E0D0);
     if (ptr)
         cdecl_call<void>(ptr, rgba);
 }
 
-SafetyHookInline* CG_GetViewFov_og_S{};
 constexpr auto STANDARD_ASPECT = 1.33333333333f;
+#if YAP_HOOK_TRACE
+#include <io.h>
+#include <fcntl.h>
+
+static HANDLE g_log_console = INVALID_HANDLE_VALUE;
+static HANDLE g_log_file = INVALID_HANDLE_VALUE;
+
+static DWORD WINAPI LogTeeThread(LPVOID param)
+{
+    char buffer[4096];
+    DWORD read = 0;
+    const DWORD pid = GetCurrentProcessId();
+    bool line_start = true;
+    while (ReadFile((HANDLE)param, buffer, sizeof(buffer), &read, NULL) && read) {
+        DWORD written = 0;
+        WriteFile(g_log_console, buffer, read, &written, NULL);
+        if (g_log_file == INVALID_HANDLE_VALUE)
+            continue;
+
+        // every line in the file gets a timestamp and the process id
+        DWORD begin = 0;
+        while (begin < read) {
+            if (line_start) {
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                char prefix[64];
+                const int len = sprintf_s(prefix, "[%02d:%02d:%02d.%03d] [%lu] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, pid);
+                WriteFile(g_log_file, prefix, (DWORD)len, &written, NULL);
+                line_start = false;
+            }
+            DWORD end = begin;
+            while (end < read && buffer[end] != '\n')
+                end++;
+            if (end < read) {
+                end++;
+                line_start = true;
+            }
+            WriteFile(g_log_file, buffer + begin, end - begin, &written, NULL);
+            begin = end;
+        }
+    }
+    return 0;
+}
+
+// Debug builds mirror stdout into console-output_<date>_<exe>.log next to the executable
+static void StartLogTee()
+{
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    std::string exe_path = path;
+    const size_t slash = exe_path.find_last_of("\\/");
+    std::string dir = slash == std::string::npos ? "" : exe_path.substr(0, slash + 1);
+    std::string stem = exe_path.substr(slash == std::string::npos ? 0 : slash + 1);
+    const size_t dot = stem.find_last_of('.');
+    if (dot != std::string::npos)
+        stem.erase(dot);
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char name[MAX_PATH];
+    sprintf_s(name, "%sconsole-output_%04d-%02d-%02d_%s.log", dir.c_str(), st.wYear, st.wMonth, st.wDay, stem.c_str());
+
+    g_log_console = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    g_log_file = CreateFileA(name, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (g_log_console == INVALID_HANDLE_VALUE)
+        return;
+
+    HANDLE pipe_read = NULL, pipe_write = NULL;
+    // the reader thread cannot start while DllMain holds the loader lock, so the pipe has to absorb everything printed until then
+    if (!CreatePipe(&pipe_read, &pipe_write, NULL, 16 * 1024 * 1024))
+        return;
+
+    const int fd = _open_osfhandle((intptr_t)pipe_write, _O_TEXT);
+    if (fd < 0 || _dup2(fd, _fileno(stdout)) != 0)
+        return;
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    CreateThread(NULL, 0, LogTeeThread, pipe_read, 0, NULL);
+
+    printf("---- %04d-%02d-%02d %02d:%02d:%02d %s ----\n", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, stem.c_str());
+}
+#endif
+
 void OpenConsole()
 {
     AllocConsole();
     freopen("CONOUT$", "w", stdout);
     freopen("CONIN$", "r", stdin);
+#if YAP_HOOK_TRACE
+    StartLogTee();
+#endif
     SetConsoleTitleA(MOD_NAME " console");
     std::cout << "Console initialized.\n";
     printf("Oh,Hi Mark\n");
@@ -274,65 +357,6 @@ float GetAspectRatio() {
 
 double GetAspectRatio_standardfix() {
     return (GetAspectRatio() / STANDARD_ASPECT);
-}
-
-double ApplyFOVScale(double fov, double fovScale, bool useFixedAspect, bool dofovScaleMath) {
-    if (dofovScaleMath && fovScale == 0.0) {
-        fovScale = cg_fovscale->value;
-    }
-
-    if (fovScale <= 0.0) {
-        return fov; // Invalid scale, return original
-    }
-
-    if (!dofovScaleMath)
-        fovScale = 1.0;
-
-    if (dofovScaleMath)
-        fov *= fovScale;
-
-    // Convert FOV to radians
-    double halfFovRad = (fov / 2.0) * (M_PI / 180.0);
-    double tanHalfFov = tan(halfFovRad);
-
-    if (useFixedAspect) {
-        // Convert horizontal FOV to vertical, then back to horizontal with new aspect ratio
-        // Convert to vertical FOV (aspect-independent)
-        double tanHalfVFov = tanHalfFov / STANDARD_ASPECT;
-        // Apply fovscale to the tangent
-
-
-
-        double newTanHalfFov = tanHalfVFov * GetAspectRatio();
-        // Convert back to degrees
-        return (2.0 * atan(newTanHalfFov) * (180.0 / M_PI));
-    }
-    else {
-
-        return (2.0 * atan(tanHalfFov) * (180.0 / M_PI));
-    }
-}
-
-double CG_GetViewFov_hook() {
-    double fov = CG_GetViewFov_og_S->call<double>();
-
-    // Apply minimum FOV constraint
-    if (cg_fovMin && cg_fovMin->base && (cg_fovMin->base->value - fov) > 0.f) {
-        fov = cg_fovMin->base->value;
-    }
-
-    // Apply FOV scaling
-    if (cg_fovscale && cg_fovscale->value) {
-        bool useFixedAspect = cg_fixedAspectFOV && cg_fixedAspectFOV->integer;
-        fov = ApplyFOVScale(fov, cg_fovscale->value, useFixedAspect,true);
-    }
-
-    // Validate result
-    if (std::isnan(fov)) {
-        return cg_fov != NULL ? cg_fov->value : 80.f;
-    }
-
-    return fov;
 }
 
 int __stdcall StringContains(const char* SubStr, const char* StringBuffer)
@@ -481,24 +505,104 @@ int process_width(int width) {
 
 SafetyHookInline LoadLibraryD;
 void game_hooks(HMODULE handle);
+
+struct StockAnchor {
+    uintptr_t addr;
+    uint8_t len;
+    uint8_t bytes[6];
+};
+
+static const StockAnchor kStockCgameAnchors[] = {
+    { 0x3001221A, 5, { 0xE8, 0x91, 0x13, 0x00, 0x00 } },
+    { 0x30011F68, 5, { 0xE8, 0x13, 0x89, 0x01, 0x00 } },
+    { 0x3002C9CE, 5, { 0xE8, 0x6D, 0xFC, 0xFF, 0xFF } },
+    { 0x30031010, 5, { 0xE8, 0x2B, 0xB6, 0xFF, 0xFF } },
+    { 0x3002D008, 2, { 0xD8, 0x35 } },
+    { 0x3002CDCD, 6, { 0xD9, 0x80, 0x74, 0x02, 0x00, 0x00 } },
+    { 0x30031DF0, 2, { 0xD9, 0x05 } },
+};
+
+static const StockAnchor kStockMpCgameAnchors[] = {
+    { 0x3001A49B, 1, { 0xE8 } },
+    { 0x30019752, 1, { 0xE8 } },
+    { 0x3001CAA0, 4, { 0x8B, 0x44, 0x24, 0x14 } },
+    { 0x3003E0D0, 4, { 0x8B, 0x44, 0x24, 0x04 } },
+    { 0x3002A181, 2, { 0x8B, 0x0E } },
+    { 0x3001A436, 2, { 0xDB, 0x05 } },
+    { 0x3001A40C, 2, { 0xD8, 0x0D } },
+};
+
+static const StockAnchor kStockMpUiAnchors[] = {
+    { 0x40019DC0, 6, { 0x81, 0xEC, 0x38, 0x04, 0x00, 0x00 } },
+    { 0x4001C060, 6, { 0x5E, 0x5D, 0x5B, 0xB8, 0x01, 0x00 } },
+};
+
+static const StockAnchor kStockUiAnchors[] = {
+    { 0x40015400, 6, { 0x81, 0xEC, 0x38, 0x04, 0x00, 0x00 } },
+    { 0x40017330, 6, { 0x5E, 0x5D, 0x5B, 0xB8, 0x01, 0x00 } },
+};
+
+static const StockAnchor kStockGameAnchors[] = {
+    { 0x200146D3, 6, { 0xE8, 0x38, 0xB9, 0x00, 0x00, 0x56 } },
+    { 0x2002019D, 6, { 0x0F, 0x84, 0x85, 0x00, 0x00, 0x00 } },
+    { 0x20020010, 3, { 0x83, 0xEC, 0x7C } },
+};
+
+// anchors hold opcode bytes only, absolute operands change when the DLL is relocated
+static bool MatchesStockBuild(HMODULE module, uintptr_t imageBase, const StockAnchor* anchors, size_t count, const char* name)
+{
+    static HMODULE verified[3]{};
+    static bool verdict[3]{};
+    const int slot = (imageBase == 0x30000000) ? 0 : (imageBase == 0x20000000) ? 1 : 2;
+
+    if (verified[slot] == module)
+        return verdict[slot];
+
+    size_t matched = 0;
+    for (size_t i = 0; module && i < count; i++) {
+        const uint8_t* p = (const uint8_t*)module + (anchors[i].addr - imageBase);
+        if (!IsBadReadPtr(p, anchors[i].len) && memcmp(p, anchors[i].bytes, anchors[i].len) == 0)
+            matched++;
+    }
+
+    const bool ok = module && matched * 2 >= count;
+    verified[slot] = module;
+    verdict[slot] = ok;
+    if (!ok)
+        YAP_LOG("[" MOD_NAME "] %s differs from the vanilla build (%zu/%zu anchors), its patches are disabled.\n", name, matched, count);
+    return ok;
+}
+
 HMODULE __stdcall LoadLibraryHook(const char* filename) {
 
     auto hModule = LoadLibraryD.unsafe_stdcall<HMODULE>(filename);
 
+    if (!hModule || !filename || !LoadedGame)
+        return hModule;
+
+    const bool isUoSp = (LoadedGame == &COD_UO_SP);
+
     if (strstr(filename, LoadedGame->cgamename) != NULL) {
+        if (isUoSp ? !MatchesStockBuild(hModule, 0x30000000, kStockCgameAnchors, std::size(kStockCgameAnchors), LoadedGame->cgamename)
+                   : !MatchesStockBuild(hModule, 0x30000000, kStockMpCgameAnchors, std::size(kStockMpCgameAnchors), LoadedGame->cgamename))
+            return hModule;
         codDLLhooks(hModule);
         component_loader::post_cgame();
     }
     else if (strstr(filename, LoadedGame->uixname) != NULL) {
+        if (isUoSp ? !MatchesStockBuild(hModule, 0x40000000, kStockUiAnchors, std::size(kStockUiAnchors), LoadedGame->uixname)
+                   : !MatchesStockBuild(hModule, 0x40000000, kStockMpUiAnchors, std::size(kStockMpUiAnchors), LoadedGame->uixname))
+            return hModule;
         ui_hooks(hModule);
         component_loader::post_ui();
     }
     else if (!strcmp(filename,"uo_gamex86.dll") && sp_mp(1)) {
+        if (!MatchesStockBuild(hModule, 0x20000000, kStockGameAnchors, std::size(kStockGameAnchors), filename))
+            return hModule;
         game_hooks(hModule);
         component_loader::post_game_sp();
     }
     else if (!strcmp(filename, "opengl32") || !strcmp(filename, "opengl32.dll")) {
-        game_hooks(hModule);
         component_loader::on_ogl_load(hModule);
     }
 
@@ -521,12 +625,17 @@ BOOL __stdcall FreeLibraryHook(HMODULE hLibModule) {
         GetModuleFileNameA(hLibModule, LibraryName, sizeof(LibraryName));
 
         if (LoadedGame && LoadedGame->cgamename && (strstr(LibraryName, LoadedGame->cgamename) != 0)) {
-            cg_game_offset = 0;
+            if ((uintptr_t)hLibModule == cg_game_offset) {
+                YAP_LOG("[" MOD_NAME "] cgame unloaded (%08X)\n", (unsigned)cg_game_offset);
+                cg_game_offset = 0;
+            }
         } else if (LoadedGame && LoadedGame->cgamename && (strstr(LibraryName, "uo_gamex86.dll") != 0)) {
-            game_offset = 0;
+            if ((uintptr_t)hLibModule == game_offset)
+                game_offset = 0;
         }
         else if (LoadedGame && LoadedGame->cgamename && (strstr(LibraryName, LoadedGame->uixname) != 0)) {
-            ui_offset = 0;
+            if ((uintptr_t)hLibModule == ui_offset)
+                ui_offset = 0;
         }
 
         uintptr_t moduleStart = (uintptr_t)hLibModule;
@@ -708,25 +817,23 @@ void PrintRegisteredCvars() {
 
 int Cvar_Init_hook() {
 
+    const ULONGLONG start_tick = GetTickCount64();
     component_loader::post_unpack();
+    YAP_LOG("[" MOD_NAME "] post_unpack took %llu ms\n", GetTickCount64() - start_tick);
 
-    int* size_cvars = (int*)0x4805EC0;
+    int* size_cvars = (int*)exe(0x4805EC0, 0x4927EA0);
     r_qol_texture_filter_anisotropic = Cevar_Get("r_qol_texture_filter_anisotropic", 16, CVAR_ARCHIVE | CVAR_LATCH, 1, 16);
     printf("cvar_init cvar hooks cvar_get ptr %p size %d\n", Cvar_Get, *size_cvars);
     auto result = cdecl_call<int>(cvar_init_og);
 
 
-    cg_fovMin = Cevar_Get("cg_fovMin", 1.f, CVAR_ARCHIVE, 1.f, 160.f);
-
     Cevar_Get("cg_fov", 80.f, CVAR_ARCHIVE, 1.f, 160.f);
 
     rinput::raw_input = Cevar_Get("m_rawinput", is_wine() ? 0 : 1, CVAR_ARCHIVE, 0, 1);
 
-    cg_fovscale = Cvar_Get((char*)"cg_fovscale", "1.0", CVAR_ARCHIVE);
     cg_fovscale_ads = Cvar_Get((char*)"cg_fovscale_ads", "1.0", CVAR_ARCHIVE);
 
     cg_fov_fix_lowfovads = Cevar_Get((char*)"cg_fov_fix_lowfovads", 0, CVAR_ARCHIVE, 0, 2);
-    cg_fixedAspectFOV = Cvar_Get((char*)"cg_fixedAspectFOV", "1", CVAR_ARCHIVE);
     cg_fixedAspect = Cevar_Get((char*)"cg_fixedAspect", 1, CVAR_ARCHIVE, 0, 3, Resolution_Static_mod_cb);
     safeArea_horizontal = Cvar_Get((char*)"safeArea_horizontal", "1.0", CVAR_ARCHIVE);
     safeArea_vertical = Cvar_Get((char*)"safeArea_vertical", "1.0", CVAR_ARCHIVE);
@@ -734,7 +841,7 @@ int Cvar_Init_hook() {
     r_noborder = Cvar_Get((char*)"r_noborder", "0", CVAR_ARCHIVE);
     r_mode_auto = Cevar_Get((char*)"r_mode_auto", 0, CVAR_ARCHIVE | CVAR_LATCH, 0, 1);
     cg_fixedAspect_blackshader_all = Cevar_Get((char*)"cg_fixedAspect_blackshader_all", 1, CVAR_ARCHIVE, 0, 1);
-    player_sprintmult = Cvar_Get("player_sprintmult", "0.66666669", CVAR_CHEAT);
+    player_sprintMult = Cvar_Get("player_sprintMult", "0.66666669", CVAR_CHEAT);
 
     if (sp_mp(1)) {
         //g_save_allowbadchecksum = Cvar_Get("g_save_allowbadchecksum", "0", 1);
@@ -1420,7 +1527,10 @@ void StaticInstructionPatches(cvar_s* safeArea_horizontal_ptr, bool DLLLoad) {
                 auto menuConfig = FindMenuConfig("Compass");
                 if (menuConfig && menuConfig->alignment.h_left) {
                     // Get actual screen width from scale
-                    float scale = *(float*)cg(0x3024B740);
+                    auto scale_ptr = cg_ptr<float>(0x3024B740);
+                    if (!scale_ptr)
+                        return;
+                    float scale = *scale_ptr;
                     float screen_width = scale * 640.0f;
                     float offset = (screen_width / 2.0f) - 640.0f;
                     offset *= get_safeArea_horizontal();
@@ -1439,7 +1549,7 @@ void StaticInstructionPatches(cvar_s* safeArea_horizontal_ptr, bool DLLLoad) {
 }
 const char* UNKNOWN = "BADSTR";
 const char* __cdecl String_Alloc_ui(const char* string_to_alloc) {
-    auto ptr = ui(0x4000D400);
+    auto ptr = ui(0x4000D400, 0x40011920);
 
     if (ptr) {
         return cdecl_call<const char*>(ptr, string_to_alloc);
@@ -1506,6 +1616,9 @@ char* AllocateString(const char* str) {
 }
 
 void InitializeDisplayModes() {
+    LARGE_INTEGER start_qpc, qpc_freq;
+    QueryPerformanceCounter(&start_qpc);
+    QueryPerformanceFrequency(&qpc_freq);
     DEVMODE devMode;
     int modeNum = 0;
     std::set<ResolutionKey> uniqueResolutions;
@@ -1576,6 +1689,13 @@ void InitializeDisplayModes() {
 
     printf("Initialized %d unique display modes (%d available for menu)\n",
         (int)r_vidModes_dynamic.size(), menuCount);
+#if YAP_HOOK_TRACE
+    {
+        LARGE_INTEGER end_qpc;
+        QueryPerformanceCounter(&end_qpc);
+        YAP_LOG("[" MOD_NAME "] display mode enumeration took %.2f ms\n", (end_qpc.QuadPart - start_qpc.QuadPart) * 1000.0 / qpc_freq.QuadPart);
+    }
+#endif
 
     // Debug print
     for (int i = 0; i < min(5, (int)r_vidModes_menu_dynamic.size()); i++) {
@@ -1597,8 +1717,6 @@ int r_vidModes_count = 0;
 int r_vidModes_menu_count = 0;
 
 void InitializeDisplayModesForGame() {
-    if (!sp_mp(1))
-        return;
     InitializeDisplayModes();
 
     r_vidModes_count = r_vidModes_dynamic.size();
@@ -1609,10 +1727,10 @@ void InitializeDisplayModesForGame() {
     r_vidModes_menu = new vidmode_menu[r_vidModes_menu_count];
     memcpy(r_vidModes_menu, r_vidModes_menu_dynamic.data(), r_vidModes_menu_count * sizeof(vidmode_menu));
 
-    auto r_mode_read = exe(0x425F9E + 2,0x4C177B + 2);
-    if (r_mode_read) {
+    auto r_mode_read = exe(0x425F9E + 2,0x4C177B + 1);
+    if (r_mode_read && (sp_mp(1) || (*(uint8_t*)(r_mode_read - 1) == 0x05 && *(uint8_t*)exe(0, 0x4C17BD) == 0xBF))) {
         Memory::VP::Patch<void*>(r_mode_read, r_vidModes);
-        Memory::VP::Patch<void*>(exe(0x425FC4 + 2,0x4C17BD + 2), r_vidModes);
+        Memory::VP::Patch<void*>(exe(0x425FC4 + 2,0x4C17BD + 1), r_vidModes);
         if (sp_mp(1)) {
             Memory::VP::Patch<void*>(exe(0x4AA35B + 1), r_vidModes);
             Memory::VP::Patch<void*>(exe(0x4AA39D + 1), r_vidModes);
@@ -1624,7 +1742,11 @@ void InitializeDisplayModesForGame() {
 void ui_hooks(HMODULE handle) {
     uintptr_t OFFSET = (uintptr_t)handle;
     ui_offset = OFFSET;
-    if (sp_mp(1)) {
+    const uintptr_t mp_multi = ui(0, 0x4001C060);
+    const bool ui_known = sp_mp(1) ||
+        (mp_multi &&
+         Memory::VP::MemEquals(mp_multi, { 0x5E, 0x5D, 0x5B, 0xB8, 0x01, 0x00, 0x00, 0x00 }));
+    if (ui_known) {
         auto cvar_version = Cvar_Find("shortversion");
 
         if (cvar_version && cvar_version->string) {
@@ -1633,12 +1755,14 @@ void ui_hooks(HMODULE handle) {
             hook_shortversion = Cvar_Get("hook_shortversion", buffer, CVAR_ROM);
         }
 
-        Item_Paint_ui = CreateInlineHook(ui(0x40015400), Item_Paint_ui_f);
-        CreateMidHook(ui(0x40017330), [](SafetyHookContext& ctx) {
+        if (sp_mp(1))
+            Item_Paint_ui = CreateInlineHook(ui(0x40015400), Item_Paint_ui_f);
+        CreateMidHook(ui(0x40017330, 0x4001C060), [](SafetyHookContext& ctx) {
             itemDef_s* item = *(itemDef_s**)(ctx.esp + 0x42C);
             if (item) {
-                if (item->cvar && !strcmp("ui_r_mode", item->cvar)) {
-                    printf("cvar %s\n", item->cvar);
+                const char*& item_cvar = sp_mp(1) ? item->cvar : *(const char**)((uint8_t*)item + 0x118);
+                if (item_cvar && !strcmp("ui_r_mode", item_cvar)) {
+                    YAP_LOG("[" MOD_NAME "] ui_r_mode list replaced with %d modes\n", r_vidModes_menu_count);
                     multiDef_t* multiPtr = (multiDef_t*)sp_mp((uintptr_t)item->typeData, item->cursorPos);
                     if (multiPtr) {
                         multiPtr->count = 0;
@@ -1657,9 +1781,9 @@ void ui_hooks(HMODULE handle) {
 
                 }
 
-                if (hook_shortversion && item->cvar && !strcmp("shortversion", item->cvar)) {
+                if (hook_shortversion && item_cvar && !strcmp("shortversion", item_cvar)) {
 
-                    item->cvar = String_Alloc_ui("hook_shortversion");
+                    item_cvar = String_Alloc_ui("hook_shortversion");
 
                 }
 
@@ -1671,6 +1795,9 @@ void ui_hooks(HMODULE handle) {
 uintptr_t G_CheckForPreventFriendlyFire_address;
 
 void G_CheckForPreventFriendlyFire(uintptr_t unknown) {
+
+    if (!game_offset || !G_CheckForPreventFriendlyFire_address)
+        return;
 
     __asm {
         mov eax,unknown
@@ -1713,10 +1840,10 @@ void game_hooks(HMODULE handle) {
     //Memory::VP::Nop(g(0x200306C8), 5);
 
 
-    if (player_sprintmult) {
+    if (player_sprintMult) {
         auto pattern = hook::pattern(handle, "? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? DF E0 F6 C4 ? 7A ? 8B 41 ? 83 E0 ? C7 44 81");
         if (!pattern.empty())
-            Memory::VP::Patch<float*>(pattern.get_first(2), &player_sprintmult->value);
+            Memory::VP::Patch<float*>(pattern.get_first(2), &player_sprintMult->value);
 
     }
 
@@ -1856,7 +1983,7 @@ void codDLLhooks(HMODULE handle) {
 
     pat = hook::pattern(handle, "? ? ? ? ? ? ? ? ? ? ? ? A1 ? ? ? ? ? ? ? ? ? ? 83 C8");
 
-    if (!pat.empty()) {
+    if (pat.size() == 1) {
         fov_world = *pat.get_first<vector2*>(2);
         printf("FOV WORLD IS UHH %p\n", fov_world);
     }
@@ -1885,15 +2012,37 @@ void codDLLhooks(HMODULE handle) {
 
     auto pattern = hook::pattern(handle, "? ? ? ? ? ? 8B 41 ? 83 F8 ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? 75");
     auto pattern2 = hook::pattern(handle, "? ? ? ? ? ? ? ? ? ? 8B 82 ? ? ? ? 50");
-    if (!pattern.empty() && !pattern2.empty()) {
-        Memory::VP::Patch<void*>(pattern.get_first(2), &DEFAULT_1_0);
-        Memory::VP::Patch<void*>(pattern.get_first(22), &DEFAULT_1_0);
-
-        Memory::VP::Patch<void*>(pattern2.get_first(2), &DEFUALT_SCREEN_HEIGHT);
-        Memory::VP::Patch<void*>(pattern2.get_first(60 + 2), &DEFUALT_SCREEN_WIDTH);
-
-        Memory::VP::InjectHook(pattern2.get_first(89), trap_R_DrawStretchPic_center_cross);
+    const uintptr_t known_reticle = cg(0x30011C73, 0x3001A1A0);
+    const uintptr_t known_scale = cg(0x30011BBB, 0x3001A0E8);
+    uint8_t* grenade_reticle = nullptr;
+    uint8_t* grenade_scale = nullptr;
+    for (size_t i = 0; i < pattern2.size(); i++) {
+        auto match = pattern2.get(i).get<uint8_t>(0);
+        if (pattern2.size() == 1 || (uintptr_t)match == known_reticle) {
+            grenade_reticle = match;
+            break;
+        }
     }
+    if (!grenade_reticle && known_reticle && Memory::VP::Valid(known_reticle) && *(uint16_t*)known_reticle == 0x05DB)
+        grenade_reticle = (uint8_t*)known_reticle;
+    for (size_t i = 0; i < pattern.size() && grenade_reticle; i++) {
+        auto match = pattern.get(i).get<uint8_t>(0);
+        if (match < grenade_reticle && grenade_reticle - match < 0x200 && (!grenade_scale || match > grenade_scale))
+            grenade_scale = match;
+    }
+    if (!grenade_scale && known_scale && Memory::VP::Valid(known_scale) && *(uint16_t*)known_scale == 0x05D9)
+        grenade_scale = (uint8_t*)known_scale;
+    if (grenade_scale && grenade_reticle) {
+        Memory::VP::Patch<void*>(grenade_scale + 2, &DEFAULT_1_0);
+        Memory::VP::Patch<void*>(grenade_scale + 22, &DEFAULT_1_0);
+
+        Memory::VP::Patch<void*>(grenade_reticle + 2, &DEFUALT_SCREEN_HEIGHT);
+        Memory::VP::Patch<void*>(grenade_reticle + 60 + 2, &DEFUALT_SCREEN_WIDTH);
+
+        Memory::VP::InjectHook(grenade_reticle + 89, trap_R_DrawStretchPic_center_cross);
+    }
+    else
+        YAP_LOG("[" MOD_NAME "] grenade reticle patch skipped (%zu/%zu matches)\n", pattern.size(), pattern2.size());
 
     static cevar_s* cg_drawCrosshair_friendly_green;
 
@@ -1902,12 +2051,14 @@ void codDLLhooks(HMODULE handle) {
 
     if (sp_mp(1)) {
         CreateMidHook(cg(0x30011916), [](SafetyHookContext& ctx) {
-            uint32_t* some_player_flags = (uint32_t*)cg(0x3026D9F0);
+            if (!cg_game_offset)
+                return;
+            uint32_t* some_player_flags = cg_ptr<uint32_t>(0x3026D9F0);
             if (is_enemy_crosshair) {
                 ctx.eip = cg(0x30011922);
                 return;
             }
-            else if ((*some_player_flags & 0x1000000) != 0 && cg_drawCrosshair_friendly_green->base->integer) {
+            else if (some_player_flags && (*some_player_flags & 0x1000000) != 0 && Cevar_Int(cg_drawCrosshair_friendly_green)) {
                 vector3* crosshair_color = (vector3*)(ctx.esp + 0x10);
                 crosshair_color->x = 0.f;
                 crosshair_color->y = 0.80f;
@@ -1933,7 +2084,6 @@ void codDLLhooks(HMODULE handle) {
         Memory::VP::Nop(cg(0, 0x3004000A), 8);
     }
 
-    CG_GetViewFov_og_S = CreateInlineHook(OFFSET + LoadedGame->DLL_CG_GetViewFov_offset, &CG_GetViewFov_hook);
     //if (MH_CreateHook((void**)OFFSET + 0x2CC20, &CG_GetViewFov_hook, (void**)&CG_GetViewFov_og) != MH_OK) {
     //    MessageBoxW(NULL, L"FAILED TO HOOK", L"Error", MB_OK | MB_ICONERROR);
     //    return;
@@ -1951,7 +2101,7 @@ void codDLLhooks(HMODULE handle) {
     Item_Paint_cg = CreateInlineHook(OFFSET + LoadedGame->Item_Paint, Item_Paint_cg_f);
 
     pat = hook::pattern(handle, "50 51 6A ? FF 15 ? ? ? ? 83 C4 ? 83 C4 ? C3 ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? 83 EC");
-    if (!pat.empty()) {
+    if (pat.size() == 1) {
         DrawObjectives = CreateMidHook(pat.get_first(), [](SafetyHookContext& ctx) {
             auto menuConfig = FindMenuConfig("Compass");
             if (menuConfig) {
@@ -1996,7 +2146,7 @@ void codDLLhooks(HMODULE handle) {
         }
 
         auto isAlignX = [elem](const alignx_e alig_type) {
-            if (!elem || !cg_hudelem_alignhack->base->integer) {
+            if (!elem || !Cevar_Int(cg_hudelem_alignhack)) {
                 return false;
             }
 
@@ -2005,7 +2155,7 @@ void codDLLhooks(HMODULE handle) {
             };
 
         auto isAlignY = [elem](const aligny_e alig_type) {
-            if (!elem || !cg_hudelem_alignhack->base->integer) {
+            if (!elem || !Cevar_Int(cg_hudelem_alignhack)) {
                 return false;
             }
 
@@ -2015,7 +2165,7 @@ void codDLLhooks(HMODULE handle) {
 
 
         // Hardcoded "black" OR config with stretch flag set
-        if(cg_hudelem_printnames->base->integer)
+        if (Cevar_Int(cg_hudelem_printnames))
         printf("name %s\n", hud_elem_shader_name);
 
         bool is_black_screen = (strcmp(hud_elem_shader_name, "black") == 0);
@@ -2061,7 +2211,7 @@ void codDLLhooks(HMODULE handle) {
 
         });
 
-    CreateMidHook(cg(0x3001F7DF), [](SafetyHookContext& ctx) {
+    CreateMidHook(cg(0x3001F7DF, 0x3002A181), [](SafetyHookContext& ctx) {
 
         float& clock_x = *(float*)ctx.esi;
         clock_x -= (process_width() * 0.5f) * get_safeArea_horizontal();
@@ -2252,7 +2402,7 @@ bool GL_EXT_texture_filter_anisotropic_supported = false;
 int __stdcall qglTexParameteri_aniso_hook1(int a1, int a2, int a3) {
     int filter_value = 1;
     if (r_qol_texture_filter_anisotropic) {
-        filter_value = std::clamp(r_qol_texture_filter_anisotropic->base->integer, 1, 16);
+        filter_value = std::clamp(Cevar_Int(r_qol_texture_filter_anisotropic, 1), 1, 16);
     }
     if(GL_EXT_texture_filter_anisotropic_supported)
     stdcall_call<int>(*(int*)qglTexParameteri_ptr, a1, 0x84FE, filter_value);
@@ -2524,7 +2674,7 @@ void InitHook() {
 
     auto pat = hook::pattern("FF 15 ? ? ? ? 8B 15 ? ? ? ? 52 E9");
 
-    gexe::keyCatchers = (uint32_t*)exe(0x4842104);
+    gexe::keyCatchers = (uint32_t*)exe(0x4842104, 0x4AD3D64);
 
     if (!pat.empty()) {
 
@@ -2921,6 +3071,10 @@ void InitHook() {
     if (!pat.empty()) {
         static auto vid_restart = safetyhook::create_mid(pat.get_first(), [](SafetyHookContext& ctx) {
 
+            if (!sp_mp(1))
+                return;
+
+            YAP_LOG("[" MOD_NAME "] vid_restart hook cleared the game offsets\n");
             cg_game_offset = 0;
             ui_offset = 0;
             game_offset = 0;

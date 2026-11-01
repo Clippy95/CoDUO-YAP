@@ -89,6 +89,9 @@
     <ClCompile Include="src\rinput.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\render_guard.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\game.ixx">
       <Filter>Source Files</Filter>
     </ClCompile>

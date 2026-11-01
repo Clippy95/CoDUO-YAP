@@ -28,9 +28,10 @@ namespace bink_game {
 
     SafetyHookInline BinkDoFrameog;
      void __stdcall BinkDoFrame_hook(void* bnk) {
-         int volume = (int)(32768.0f * std::clamp(mss_volume->value,0.f,1.f));
-
-         stdcall_call<void>(BinkSetVolumePtr, bnk, volume);
+        if (bnk && BinkSetVolumePtr && mss_volume) {
+            int volume = (int)(32768.0f * std::clamp(mss_volume->value, 0.f, 1.f));
+            stdcall_call<void>(BinkSetVolumePtr, bnk, 0u, volume);
+        }
 
          BinkDoFrameog.unsafe_stdcall(bnk);
     }
@@ -53,15 +54,13 @@ namespace bink_game {
 
             auto pattern = hook::pattern("88 99 ? ? ? ? C7 05");
 
-            if (!pattern.empty() && sp_mp(1)) {
+            if (!pattern.empty()) {
                 static auto roq_test_fix1 = safetyhook::create_mid(pattern.get_first(0), [](SafetyHookContext& ctx) {
 
-                    cin_cache* cin_tables = (cin_cache*)0x877558;
-                    if (cinematic_reset_RoQPlayed && cinematic_reset_RoQPlayed->base->integer != 0) {
-
-                        int* roqplayed = &cin_tables[ctx.ecx].RoQPlayed;
-
-                        Memory::VP::Patch(roqplayed, 0);
+                    const uintptr_t stride = sp_mp(0x1D8, 0x1D0);
+                    const uintptr_t tables = exe(0x877558, 0x8CB4F8);
+                    if (Cevar_Int(cinematic_reset_RoQPlayed) != 0 && ctx.ecx < stride * 16 && ctx.ecx % stride == 0) {
+                        Memory::VP::Patch<int>((int*)(tables + ctx.ecx + offsetof(cin_cache, RoQPlayed)), 0);
                     }
                     
 

@@ -574,19 +574,19 @@ void WINAPI glBindFragmentShaderATI_hook(GLuint id) {
             if (loc >= 0) fglUniform4f(loc, fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
 
             loc = fglGetUniformLocation(program, "debugMode");
-            if (loc >= 0) fglUniform1i(loc, (GLint)r_arb_fragment_shader_debug->base->integer);
+            if (loc >= 0) fglUniform1i(loc, (GLint)Cevar_Int(r_arb_fragment_shader_debug));
 
             loc = fglGetUniformLocation(program, "debugMode");
-            if (loc >= 0) fglUniform1i(loc, r_arb_fragment_shader_debug->base->integer);
+            if (loc >= 0) fglUniform1i(loc, Cevar_Int(r_arb_fragment_shader_debug));
 
             loc = fglGetUniformLocation(program, "fresnelPower");
-            if (loc >= 0) fglUniform1f(loc, r_arb_fragment_fresnel_power->base->value);
+            if (loc >= 0) fglUniform1f(loc, Cevar_Value(r_arb_fragment_fresnel_power));
 
             loc = fglGetUniformLocation(program, "fresnelBias");
-            if (loc >= 0) fglUniform1f(loc, r_arb_fragment_fresnel_bias->base->value);
+            if (loc >= 0) fglUniform1f(loc, Cevar_Value(r_arb_fragment_fresnel_bias));
 
             loc = fglGetUniformLocation(program, "disableFog");
-            if (loc >= 0) fglUniform1i(loc, r_arb_fragment_disable_fog->base->integer);
+            if (loc >= 0) fglUniform1i(loc, Cevar_Int(r_arb_fragment_disable_fog));
 
         }
 
@@ -1108,6 +1108,8 @@ namespace opengl_ati_frag {
             //            });
 
              pattern = hook::pattern("0F 84 ? ? ? ? 8B 0D ? ? ? ? 39 71 ? 0F 84 ? ? ? ? 68 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68 ? ? ? ? A3 ? ? ? ? A3 ? ? ? ? FF 15 ? ? ? ? 68");
+            if (pattern.empty())
+                return;
             GL_ATI_fragment_shader_force_jump = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& ctx) {
 
                 if (!fglCreateShader || !fglShaderSource || !fglCompileShader) {
@@ -1121,12 +1123,12 @@ namespace opengl_ati_frag {
 
 
                 bool skip_due_to_nvidia = GL_NV_fragment_combo &&
-                    (r_nv_register_combiners->integer > 0 || r_nv_texture_shader->integer > 0);
+                    ((r_nv_register_combiners && r_nv_register_combiners->integer > 0) || (r_nv_texture_shader && r_nv_texture_shader->integer > 0));
                 bool skip_due_to_ati = GL_ATI_FRAGMENT_SHADER_exists &&
-                    (r_arb_fragment_shader_wrap_ati->base->integer <= 2);
+                    (Cevar_Int(r_arb_fragment_shader_wrap_ati) <= 2);
 
                 if (!skip_due_to_nvidia && !skip_due_to_ati) {
-                    if ((fglCreateShader && fglUseProgram) && (r_arb_fragment_shader_wrap_ati->base->integer)) {
+                    if ((fglCreateShader && fglUseProgram) && Cevar_Int(r_arb_fragment_shader_wrap_ati)) {
                         ctx.eip = (GL_ATI_fragment_shader_force_jump.target_address() + 6);
                         ATI_FRAGMENT_SHADER_VALID = true;
                         Com_Printf("[" MOD_NAME "] " "Force Enabling GL_ATI_fragment_shader by translating it to GL_ARB_FRAGMENT_SHADER\n");

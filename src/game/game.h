@@ -16,6 +16,19 @@ constexpr auto BASE_UI = 0x40000000;
 
 uintptr_t cg(uintptr_t CODUOSP, uintptr_t CODUOMP = 0);
 
+template <typename T>
+inline T* cg_ptr(uintptr_t CODUOSP, uintptr_t CODUOMP = 0)
+{
+	return reinterpret_cast<T*>(cg(CODUOSP, CODUOMP));
+}
+
+template <typename T>
+inline T cg_read(uintptr_t CODUOSP, T fallback = T{}, uintptr_t CODUOMP = 0)
+{
+	T* p = cg_ptr<T>(CODUOSP, CODUOMP);
+	return p ? *p : fallback;
+}
+
 uintptr_t ui(uintptr_t CODUOSP, uintptr_t CODUOMP = 0);
 
 uintptr_t g(uintptr_t CODUOSP, uintptr_t CODUOMP = 0);
@@ -385,7 +398,7 @@ namespace game {
 	WEAK symbolp<void*(size_t size)> Hunk_AllocateTempMemory{ "85 C9 56 57 75 ? 8B 7C 24",-6 };
 
 	//WEAK symbol<void(float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t hShader)> drawStretchPic{ 0x4DF240 };
-	WEAK symbol<void(float *color)> SetColor{ 0x4DF1B0 };
+	WEAK symbol<void(float *color)> SetColor{ 0x4DF1B0, 0x4F00F0 };
     WEAK symbolp<qhandle_t> cstate{ "A1 ? ? ? ? 83 E8 00",1,game::EXE,true };
     WEAK symbolp<qhandle_t> keycatchers{ "F6 05 ? ? ? ? ? 74 ? ? ? ? ? ? ? ? ? ? ? ? ? ? ? DF E0",2,game::EXE,true };
 

@@ -22,17 +22,19 @@ Aiming to provide enhancements, quality-of-life improvements and advanced featur
 | `cg_fovscale` | Applies a multiplier to overall FOV |
 | `cg_fovscale_ads` | Applies a multiplier to Aim down sights (ADS) FOV |
 | `m_rawinput` | Toggles raw mouse input |
+| `cg_weaponFov` | Weapon FOV, independent of `cg_fov`: default `80`, `0` follows `cg_fov`. Blends back to stock while Aiming down sights |
 | `cg_fovMin` | Sets the minimum FOV that the game will allow during ADS |
 | `r_qol_texture_filter_anisotropic` | Determines anisotropic filtering, applies only if GPU vendor supports `GL_EXT_texture_filter_anisotropic` |
 | `r_noborder` | Borderless windowed when `r_fullscreen` is set to `0`,<br>`r_fullscreen 0;r_noborder 1;vid_ypos 0;vid_xpos 0;vid_restart` is recommended |
 | `r_mode_auto` | When set to `1`, it will automatically determine your screen resolution when `r_mode` is set to `-1` |
 | `player_sprintSpeedScale` | Scales sprint speed **(SP only)** |
-| `player_sprintmult` | Controls how fast the sprint meter will run out **(SP only)** |
+| `player_sprintMult` | Controls how fast the sprint meter will run out **(SP only)** |
+| `player_sprintIdleRegen` | `1` keeps the sprint meter regenerating while sprint key is held but you are standing still or blocked **(SP only)** |
 | `g_enemyFireDist` | Distance before tagging client's crosshair red,<br>`0` disables this functionality **(SP only)** |
 | `cg_drawCrosshair_friendly_green` | `1` will change the crosshair color to green when aiming at friendly NPCs **(SP only)** |
-| `cg_weaponSprint_mod` <h5 id="cg_weaponsprint_mod"></h5> | Restores <sup><sup>yes this was planned for UO</sup></sup>  and implements new **weapon bobbing** while sprinting and **rotation attributes** inspired by T4, requires new eWeapon files for each weapon **(SP only)**<img src="https://github.com/user-attachments/assets/dc0ccdae-9d7a-4c06-8941-c7535c0b1771" alt="cg_weaponsprint_mod"/> |
-| `reload_eweapons` | Console command to reload eWeapon definitions **(SP only)** |
-| `bg_allowJumpShot` | allows player to keep ADS while jumping (SP only) |
+| `cg_weaponSprint_mod` <h5 id="cg_weaponsprint_mod"></h5> | Restores <sup><sup>yes this was planned for UO</sup></sup>  and implements new **weapon bobbing** while sprinting and **rotation attributes** inspired by T4, requires new eWeapon files for each weapon<img src="https://github.com/user-attachments/assets/dc0ccdae-9d7a-4c06-8941-c7535c0b1771" alt="cg_weaponsprint_mod"/> |
+| `reload_eweapons` | Console command to reload eWeapon definitions |
+| `bg_allowJumpShot` | allows player to keep ADS while jumping **(SP only)** |
 | `yap_xanim_iw3_transitionTime` | implements xanim transitionTime for weapon animations, akin to IW3+ this achieves lerp'd cancel weapon switches animations |
 | `cg_subtitle_centered_enable` | Aligns subtitles to the center rather than the left |
 | `cg_ammo_overwrite_size_enabled` & `cg_ammo_overwrite_size` | Allows you to customize the font size of the ammo counter |

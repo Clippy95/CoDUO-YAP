@@ -37,8 +37,14 @@ namespace gui {
     cevar_s* cg_subtitle_centered_spacing_multiplier = nullptr;
     cevar_s* cg_subtitle_centered_ignore_hook = nullptr;
     cevar_s* cg_DrawPlayerStance_disable = nullptr;
+    bool mp_loading_state(int state) {
+        return !sp_mp(1) && (state == 4 || state == 5);
+    }
+
 	void draw_branding() {
         if (!branding || !branding->base || !branding->base->integer)
+            return;
+        if (game::cstate && mp_loading_state(*game::cstate))
             return;
 
         auto x = 2.f - (float)process_width(0) * 0.5f;
@@ -61,6 +67,10 @@ namespace gui {
 
     void* VM_call_og;
 
+    bool in_game_state(int state) {
+        return sp_mp(1) ? state == 2 : (state >= 4 && state <= 6);
+    }
+
     void __stdcall DrawBlack() {
         float black[] = {0.f,0.f,0.f,1.f};
         game::SetColor(black);
@@ -71,7 +81,7 @@ namespace gui {
     static bool is_subtitle_draw = false;
     uintptr_t Con_DrawSubtitles_og;
     int __cdecl Con_DrawSubtitles(int a1, float a2, int a3) {
-        if(cg_subtitle_centered_enable->base->integer)
+        if (Cevar_Int(cg_subtitle_centered_enable))
         is_subtitle_draw = true;
         auto result = cdecl_call<int>(Con_DrawSubtitles_og, a1, a2, a3);
         is_subtitle_draw = false;
@@ -79,7 +89,7 @@ namespace gui {
     }
     uintptr_t cg_DrawPlayerStance_ptr;
     int __cdecl CG_DrawPlayerStance_hook(float* a1, int* a2, int a3) {
-        if (cg_DrawPlayerStance_disable->base->integer == cg_DrawPlayerStance_disable->limits.i.max)
+        if (Cevar_Int(cg_DrawPlayerStance_disable) >= 2)
             return NULL;
 
         return cdecl_call<int>(cg_DrawPlayerStance_ptr, a1, a2, a3);
@@ -98,10 +108,12 @@ namespace gui {
             cg_ammo_overwrite_size = Cevar_Get("cg_ammo_overwrite_size", 0.3f,CVAR_ARCHIVE);
             cg_ammo_overwrite_size_enabled = Cevar_Get("cg_ammo_overwrite_size_enabled", 1, CVAR_ARCHIVE);
 
+            cg_DrawPlayerStance_disable = Cevar_Get("cg_DrawPlayerStance_disable", 0, CVAR_ARCHIVE, 0, 2);
+
             if (sp_mp(0, 1))
                 cg_subtitle_centered_ignore_hook = Cevar_Get("cg_subtitle_centered_ignore_hook", 0, CVAR_ARCHIVE,0,1);
 
-            if (!cg_subtitle_centered_ignore_hook || cg_subtitle_centered_ignore_hook->base->integer == 0) {
+            if (!cg_subtitle_centered_ignore_hook || Cevar_Int(cg_subtitle_centered_ignore_hook) == 0) {
                 cg_subtitle_centered_enable = Cevar_Get("cg_subtitle_centered_enable", 1, CVAR_ARCHIVE);
                 cg_subtitle_centered_font = Cevar_Get("cg_subtitle_centered_font", 0, CVAR_ARCHIVE);
 
@@ -111,8 +123,6 @@ namespace gui {
 
                 cg_subtitle_centered_spacing_multiplier = Cevar_Get("cg_subtitle_centered_spacing_multiplier", 1.f, CVAR_ARCHIVE);
 
-                cg_DrawPlayerStance_disable = Cevar_Get("cg_DrawPlayerStance_disable", 0, CVAR_ARCHIVE, 0, 2);
-
                 Memory::VP::Nop(exe(0x00409BB5, 0x0040A7C5), 8);
                 Memory::VP::InterceptCall(exe(0x0040234A, 0x0040270C), Con_DrawSubtitles_og, Con_DrawSubtitles);
                 static auto mode = safetyhook::create_mid(exe(0x0040A11E, 0x0040AF8E), [](SafetyHookContext& ctx) {
@@ -120,7 +130,7 @@ namespace gui {
                         return;
                     ctx.ecx = 3;
                     *(int*)ctx.esp = 320;
-                    ctx.eax = cg_subtitle_centered_y->base->integer;
+                    ctx.eax = Cevar_Int(cg_subtitle_centered_y, 0x1A9);
                     });
 
                 static auto drawstringonhud = safetyhook::create_mid(exe(0x00409BB3, 0x0040A7C3), [](SafetyHookContext& ctx) {
@@ -128,8 +138,8 @@ namespace gui {
                         *(float*)((ctx.esp + 0x10)) = 0.3333333433f;
                         return;
                     }
-                    ctx.esi = cg_subtitle_centered_font->base->integer;
-                    float scale = cg_subtitle_centered_scale->base->value;
+                    ctx.esi = Cevar_Int(cg_subtitle_centered_font);
+                    float scale = Cevar_Value(cg_subtitle_centered_scale, 0.25f);
                     *(float*)ctx.esp = scale;
 
                     *(float*)ctx.esp = scale;
@@ -144,7 +154,7 @@ namespace gui {
                         return;
                     float eax_float = ctx.eax;
 
-                    eax_float *= cg_subtitle_centered_spacing_multiplier->base->value;
+                    eax_float *= Cevar_Value(cg_subtitle_centered_spacing_multiplier, 1.f);
                     ctx.eax = (int)eax_float;
 
                     });
@@ -161,16 +171,28 @@ namespace gui {
             if (!glcolorpat.empty() && !glclearpat.empty() && !pattern.empty()) {
                 r_fixedaspect_clear = Cevar_Get("r_fixedaspect_clear", 2, CVAR_ARCHIVE, 0, 2);
                 static auto yeah = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& ctx) {
-                    if (!r_fixedaspect_clear)
+                    const int clearMode = Cevar_Int(r_fixedaspect_clear);
+                    if (!clearMode)
                         return;
-                    if ((r_fixedaspect_clear->base->integer == 1 || (r_fixedaspect_clear->base->integer == 2 && (*game::cstate != 2 || *game::keycatchers & KEYCATCH_UI)))) {
+                    const int state = *game::cstate;
+                    static int last_state = -1;
+                    const bool changed = state != last_state;
+                    last_state = state;
 
-                            auto qglClearColor = *glClearColor;
-                            qglClearColor(0.f, 0.f, 0.f, 1.f);
+                    bool clear;
+                    if (mp_loading_state(state))
+                        clear = changed;
+                    else if (!sp_mp(1) && changed && state == 6)
+                        clear = true;
+                    else
+                        clear = clearMode == 1 || (!in_game_state(state) || *game::keycatchers & KEYCATCH_UI);
 
-                            auto qglClear = *glClear;
-                            qglClear(16640); // GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT
-                        
+                    if (clear) {
+                        auto qglClearColor = *glClearColor;
+                        qglClearColor(0.f, 0.f, 0.f, 1.f);
+
+                        auto qglClear = *glClear;
+                        qglClear(16640); // GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT
                     }
                     });
 
@@ -202,10 +224,10 @@ namespace gui {
 
                 CreateMidHook(cg(0x3002570E,0x3003218A), [](SafetyHookContext& ctx) {
 
-                    if (cg_ammo_overwrite_size_enabled->base->integer && cg_ammo_overwrite_size->base->value) {
+                    if (Cevar_Int(cg_ammo_overwrite_size_enabled) && Cevar_Value(cg_ammo_overwrite_size)) {
 
                         float* scale = sp_mp(1) ? (float*)&ctx.eax : (float*)ctx.esp;
-                        *scale = cg_ammo_overwrite_size->base->value;
+                        *scale = Cevar_Value(cg_ammo_overwrite_size);
 
 
                     }
@@ -219,7 +241,7 @@ namespace gui {
 
             CreateMidHook(cg(0x30023959, 0x3002F589), [](SafetyHookContext& ctx) {
 
-                if (cg_DrawPlayerStance_disable->base->integer == 1) {
+                if (Cevar_Int(cg_DrawPlayerStance_disable) == 1) {
                     EFlags32& flags = *(EFlags32*)&ctx.eflags;
                     flags.ZF = 1;
                 }

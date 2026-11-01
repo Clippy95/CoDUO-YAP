@@ -2,6 +2,7 @@
 
 #define NOMINMAX
 
+#include "hook_trace.h"
 #include "safetyhook.hpp"
 
 
@@ -292,7 +293,11 @@ Allocator::Memory::~Memory() {
 
 namespace safetyhook {
 InlineHook create_inline(void* target, void* destination, InlineHook::Flags flags) {
-    if (auto hook = InlineHook::create(target, destination, flags)) {
+    auto hook = InlineHook::create(target, destination, flags);
+#if YAP_HOOK_TRACE
+    yap_trace_target("inline", target, hook ? "ok" : "FAIL");
+#endif
+    if (hook) {
         return std::move(*hook);
     } else {
         return {};
@@ -300,7 +305,11 @@ InlineHook create_inline(void* target, void* destination, InlineHook::Flags flag
 }
 
 MidHook create_mid(void* target, MidHookFn destination, MidHook::Flags flags) {
-    if (auto hook = MidHook::create(target, destination, flags)) {
+    auto hook = MidHook::create(target, destination, flags);
+#if YAP_HOOK_TRACE
+    yap_trace_target("mid", target, hook ? "ok" : "FAIL");
+#endif
+    if (hook) {
         return std::move(*hook);
     } else {
         return {};

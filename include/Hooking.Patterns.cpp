@@ -211,6 +211,10 @@ void basic_pattern_impl::EnsureMatches(uint32_t maxCount)
 		return (m_matches.size() == maxCount);
 	};
 
+	// unpacked executables are a single huge section, the code is in the first few megabytes
+	constexpr uintptr_t maxScanSize = 0x800000;
+	const uintptr_t scanEnd = executable.end() - executable.begin() > 0x1000000 ? executable.begin() + maxScanSize : executable.end();
+
 	const uint8_t* pattern = m_bytes.data();
 	const uint8_t* mask = m_mask.data();
 	const size_t maskSize = m_mask.size();
@@ -230,7 +234,7 @@ void basic_pattern_impl::EnsureMatches(uint32_t maxCount)
 
 	__try
 	{
-		for (uintptr_t i = executable.begin(), end = executable.end() - maskSize; i <= end;)
+		for (uintptr_t i = executable.begin(), end = scanEnd - maskSize; i <= end;)
 		{
 			uint8_t* ptr = reinterpret_cast<uint8_t*>(i);
 			ptrdiff_t j = maskSize - 1;

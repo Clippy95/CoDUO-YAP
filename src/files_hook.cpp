@@ -15,8 +15,10 @@
 #include "framework.h"
 namespace files_hook {
     cevar_s* fs_rawfiles;
-    uintptr_t FS_filelength_addr = 0x422EF0;
+    uintptr_t FS_filelength_addr = 0;
     int FS_filelength(int a1) {
+        if (!FS_filelength_addr)
+            FS_filelength_addr = exe(0x422EF0, 0x42CAB0);
         int result;
         __asm {
             mov eax, a1
@@ -25,8 +27,10 @@ namespace files_hook {
         }
         return result;
     }
-    uintptr_t FS_HandleForFile_addr = 0x422E30;
+    uintptr_t FS_HandleForFile_addr = 0;
     int FS_HandleForFile(int a1) {
+        if (!FS_HandleForFile_addr)
+            FS_HandleForFile_addr = exe(0x422E30, 0x42C9F0);
         int result;
         __asm {
             mov eax, a1
@@ -108,9 +112,28 @@ namespace files_hook {
 
 
         if (trySpecial) {
+            static ULONGLONG last_check = 0;
+            static bool raw_dir_exists = false;
+            const ULONGLONG now = GetTickCount64();
+            if (!last_check || now - last_check > 2000) {
+                last_check = now;
+                auto base = Cvar_Find("fs_basepath");
+                char dir[512];
+                raw_dir_exists = false;
+                if (base && base->string) {
+                    sprintf_s(dir, sizeof(dir), "%s\\YAP_raw", base->string);
+                    const DWORD attr = GetFileAttributesA(dir);
+                    raw_dir_exists = attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
+                }
+            }
+            if (!raw_dir_exists)
+                trySpecial = false;
+        }
+
+        if (trySpecial) {
             auto fs_basepath = Cvar_Find("fs_basepath");
             char filepath[512];
-            sprintf(filepath, "%s\\YAP_raw\\%s", fs_basepath->string, filename);
+            sprintf_s(filepath, sizeof(filepath), "%s\\YAP_raw\\%s", fs_basepath->string, filename);
 
             FILE* f = fopen(filepath, "rb");
             if (f) {

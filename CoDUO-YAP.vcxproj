@@ -188,6 +188,7 @@ popd</Command>
     <ClInclude Include="src\framework.h" />
     <ClInclude Include="include\Hooking.Patterns.h" />
     <ClInclude Include="include\helper.hpp" />
+    <ClInclude Include="include\hook_trace.h" />
     <ClInclude Include="include\MemoryMgr.h" />
     <ClInclude Include="src\game\game.h" />
     <ClInclude Include="src\GMath.h" />
@@ -221,6 +222,7 @@ popd</Command>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\rinput.cpp" />
+    <ClCompile Include="src\render_guard.cpp" />
     <ClCompile Include="include\safetyhook.cpp" />
     <ClCompile Include="include\Zydis.c" />
     <ClCompile Include="src\SDLLP.cpp" />

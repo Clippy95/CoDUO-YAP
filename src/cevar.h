@@ -48,6 +48,14 @@ typedef struct cevar_s {
 // ============================================================================
 extern std::unordered_map<cvar_t*, cevar_t*> g_cevars;
 
+inline float Cevar_Value(const cevar_t* c, float fallback = 0.f) {
+    return (c && c->base) ? c->base->value : fallback;
+}
+
+inline int Cevar_Int(const cevar_t* c, int fallback = 0) {
+    return (c && c->base) ? c->base->integer : fallback;
+}
+
 // ============================================================================
 // CEVAR HELPER - Get cevar from cvar without modifying struct
 // ============================================================================

@@ -28,6 +28,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include "hook_trace.h"
 
 #include <cstdint>
 #include <cassert>
@@ -291,9 +292,25 @@ namespace Memory
 
 		using Memory::DynBaseAddress;
 
-		template<typename T, typename AT>
-		inline void		Patch(AT address, T value)
+		inline bool Valid(uintptr_t address)
 		{
+			return address >= 0x10000;
+		}
+
+#if YAP_HOOK_TRACE
+#define YAP_VP_CHECK(kind, write) if (!yap_trace_check(kind, (uintptr_t)address, Valid((uintptr_t)address), write, loc)) return
+#define YAP_VP_CHECK_RET(kind, ret) if (!yap_trace_check(kind, (uintptr_t)address, Valid((uintptr_t)address), false, loc)) return ret
+#define YAP_LOC , const std::source_location& loc = std::source_location::current()
+#else
+#define YAP_VP_CHECK(kind, write) if (!Valid((uintptr_t)address)) return
+#define YAP_VP_CHECK_RET(kind, ret) if (!Valid((uintptr_t)address)) return ret
+#define YAP_LOC
+#endif
+
+		template<typename T, typename AT>
+		inline void		Patch(AT address, T value YAP_LOC)
+		{
+			YAP_VP_CHECK("Patch", true);
 			DWORD		dwProtect;
 			VirtualProtect((void*)address, sizeof(T), PAGE_EXECUTE_READWRITE, &dwProtect);
 			Memory::Patch( address, value );
@@ -301,8 +318,9 @@ namespace Memory
 		}
 
 		template<typename AT>
-		inline void		Patch(AT address, std::initializer_list<uint8_t> list )
+		inline void		Patch(AT address, std::initializer_list<uint8_t> list YAP_LOC)
 		{
+			YAP_VP_CHECK("PatchBytes", true);
 			DWORD		dwProtect;
 			VirtualProtect((void*)address, list.size(), PAGE_EXECUTE_READWRITE, &dwProtect);
 			Memory::Patch(address, std::move(list));
@@ -310,14 +328,16 @@ namespace Memory
 		}
 
 		template<typename Var, typename AT>
-		inline void		Read(AT address, Var& var)
+		inline void		Read(AT address, Var& var YAP_LOC)
 		{
+			YAP_VP_CHECK("Read", false);
 			Memory::Read(address, var);
 		}
 
 		template<typename AT>
-		inline void		Nop(AT address, size_t count)
+		inline void		Nop(AT address, size_t count YAP_LOC)
 		{
+			YAP_VP_CHECK("Nop", true);
 			DWORD		dwProtect;
 			VirtualProtect((void*)address, count, PAGE_EXECUTE_READWRITE, &dwProtect);
 			Memory::Nop( address, count );
@@ -325,8 +345,9 @@ namespace Memory
 		}
 
 		template<typename Var, typename AT>
-		inline void		WriteOffsetValue(AT address, Var var, ptrdiff_t bytesAfterDisplacement = 0)
+		inline void		WriteOffsetValue(AT address, Var var, ptrdiff_t bytesAfterDisplacement = 0 YAP_LOC)
 		{
+			YAP_VP_CHECK("WriteOffset", true);
 			DWORD		dwProtect;
 
 			VirtualProtect((void*)address, 4, PAGE_EXECUTE_READWRITE, &dwProtect);
@@ -335,14 +356,16 @@ namespace Memory
 		}
 
 		template<typename Var, typename AT>
-		inline void		ReadOffsetValue(AT address, Var& var, ptrdiff_t bytesAfterDisplacement = 0)
+		inline void		ReadOffsetValue(AT address, Var& var, ptrdiff_t bytesAfterDisplacement = 0 YAP_LOC)
 		{
+			YAP_VP_CHECK("ReadOffset", false);
 			Memory::ReadOffsetValue(address, var, bytesAfterDisplacement);
 		}
 
 		template<typename Var, typename AT>
-		inline void		WriteMemDisplacement(AT address, Var var, ptrdiff_t bytesAfterDisplacement = 0)
+		inline void		WriteMemDisplacement(AT address, Var var, ptrdiff_t bytesAfterDisplacement = 0 YAP_LOC)
 		{
+			YAP_VP_CHECK("WriteDisp", true);
 			DWORD		dwProtect;
 
 			VirtualProtect((void*)address, 4, PAGE_EXECUTE_READWRITE, &dwProtect);
@@ -351,13 +374,15 @@ namespace Memory
 		}
 
 		template<typename Var, typename AT>
-		inline void		ReadMemDisplacement(AT address, Var& var, ptrdiff_t bytesAfterDisplacement = 0)
+		inline void		ReadMemDisplacement(AT address, Var& var, ptrdiff_t bytesAfterDisplacement = 0 YAP_LOC)
 		{
+			YAP_VP_CHECK("ReadDisp", false);
 			Memory::ReadMemDisplacement(address, var, bytesAfterDisplacement);
 		}
 
-		inline auto InterceptMemDisplacement = [](auto address, auto& orig, auto& var, ptrdiff_t bytesAfterDisplacement = 0)
+		inline auto InterceptMemDisplacement = [](auto address, auto& orig, auto& var, ptrdiff_t bytesAfterDisplacement = 0 YAP_LOC)
 		{
+			YAP_VP_CHECK("InterceptDisp", true);
 			DWORD		dwProtect;
 
 			VirtualProtect((void*)address, 5, PAGE_EXECUTE_READWRITE, &dwProtect);
@@ -366,8 +391,9 @@ namespace Memory
 		};
 
 		template<typename AT, typename Func>
-		inline void		InjectHook(AT address, Func hook)
+		inline void		InjectHook(AT address, Func hook YAP_LOC)
 		{
+			YAP_VP_CHECK("InjectHook", true);
 			DWORD		dwProtect;
 
 			VirtualProtect((void*)((DWORD_PTR)address + 1), 4, PAGE_EXECUTE_READWRITE, &dwProtect);
@@ -376,8 +402,9 @@ namespace Memory
 		}
 
 		template<typename AT, typename Func>
-		inline void		InjectHook(AT address, Func hook, HookType type)
+		inline void		InjectHook(AT address, Func hook, HookType type YAP_LOC)
 		{
+			YAP_VP_CHECK("InjectHook", true);
 			DWORD		dwProtect;
 
 			VirtualProtect((void*)address, 5, PAGE_EXECUTE_READWRITE, &dwProtect);
@@ -386,19 +413,22 @@ namespace Memory
 		}
 
 		template<typename Func, typename AT>
-		inline void		ReadCall(AT address, Func& func)
+		inline void		ReadCall(AT address, Func& func YAP_LOC)
 		{
+			YAP_VP_CHECK("ReadCall", false);
 			Memory::ReadCall(address, func);
 		}
 
 		template<typename AT>
-		inline void*	ReadCallFrom(AT address, ptrdiff_t offset = 0)
+		inline void*	ReadCallFrom(AT address, ptrdiff_t offset = 0 YAP_LOC)
 		{
+			YAP_VP_CHECK_RET("ReadCallFrom", nullptr);
 			return Memory::ReadCallFrom(address, offset);
 		}
 
-		constexpr auto InterceptCall = [](auto address, auto& func, auto&& hook)
+		constexpr auto InterceptCall = [](auto address, auto& func, auto&& hook YAP_LOC)
 		{
+			YAP_VP_CHECK("InterceptCall", true);
 			DWORD		dwProtect;
 
 			VirtualProtect((void*)address, 5, PAGE_EXECUTE_READWRITE, &dwProtect);
